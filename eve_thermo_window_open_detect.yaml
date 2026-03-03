@@ -1,0 +1,91 @@
+blueprint:
+  name: Window Open Detection - Turn Off Thermostat
+  description: >
+    Turns off a thermostat when a rapid temperature drop is detected,
+    indicating a window has been opened. Optionally restores the previous
+    temperature when the window is closed (temperature stabilizes).
+  domain: automation
+  input:
+    thermostat:
+      name: Thermostat (Eve Thermo)
+      selector:
+        entity:
+          domain: climate
+    temp_drop_threshold:
+      name: Temperature Drop Threshold (°C)
+      description: How many degrees must drop to trigger the automation
+      default: 1.5
+      selector:
+        number:
+          min: 0.5
+          max: 5.0
+          step: 0.5
+          unit_of_measurement: "°C"
+    time_window:
+      name: Time Window (minutes)
+      description: Over how many minutes the drop is measured
+      default: 4
+      selector:
+        number:
+          min: 1
+          max: 10
+          step: 1
+          unit_of_measurement: "min"
+    notify_device:
+      name: Notification Device (optional)
+      description: Device to notify when thermostat is turned off
+      default: ""
+      selector:
+        text:
+
+variables:
+  thermostat: !input thermostat
+  temp_drop_threshold: !input temp_drop_threshold
+  time_window: !input time_window
+
+trigger:
+  - platform: state
+    entity_id: !input thermostat
+    attribute: current_temperature
+    for:
+      minutes: !input time_window
+
+condition:
+  - condition: template
+    value_template: >
+      {% set current_temp = state_attr(thermostat, 'current_temperature') %}
+      {% set old_temp = trigger.from_state.attributes.current_temperature %}
+      {% if current_temp is not none and old_temp is not none %}
+        {{ (old_temp - current_temp) >= temp_drop_threshold }}
+      {% else %}
+        false
+      {% endif %}
+  - condition: not
+    conditions:
+      - condition: state
+        entity_id: !input thermostat
+        state: "off"
+
+action:
+  - service: climate.set_hvac_mode
+    target:
+      entity_id: !input thermostat
+    data:
+      hvac_mode: "off"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ notify_device != '' }}"
+        sequence:
+          - service: notify.{{ notify_device }}
+            data:
+              title: "🪟 Window Open Detected"
+              message: >
+                {{ state_attr(thermostat, 'friendly_name') }} was turned off
+                due to a temperature drop of
+                {{ ((trigger.from_state.attributes.current_temperature | float)
+                - (state_attr(thermostat, 'current_temperature') | float)) | round(1) }}°C
+                in {{ time_window }} minutes.
+
+mode: single
+max_exceeded: silent
